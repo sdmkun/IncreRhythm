@@ -351,7 +351,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   minGauge: 0
   maxGauge: 100
-  initialGauge: 20
+  initialGauge: 80
   perfectGain: 2
   greatGain: 1.5
   goodGain: 0.5

@@ -42,6 +42,9 @@ public class CRICueTest : MonoBehaviour
     private int lastSpawnedBeat = -1;   // 重複生成防止用
     private float currentTotalBeat = 0; // Update内で共有する現在の通算ビート
 
+    // ブロック切り替え用
+    private bool hasTriggeredBlockSwitch = false; // ブロック切り替え済みフラグ
+
     void Start()
     {
         // コンポーネント取得の保険
@@ -135,6 +138,10 @@ public class CRICueTest : MonoBehaviour
 
         // --- 6. AISAC更新（グルーブゲージに基づく） ---
         UpdateAisacByGrooveGauge();
+
+
+        // --- 7. グルーブゲージがマックスならブロック切り替え ---
+        CheckAndSwitchBlock();
 
         player.UpdateAll();
     }
@@ -282,6 +289,22 @@ public class CRICueTest : MonoBehaviour
         if (aisacValues.Length > 0)
         {
             aisacValues[0] = normalizedGauge;
+        }
+    }
+
+    /// <summary>
+    /// グルーブゲージがマックスになったらブロック1に切り替え
+    /// </summary>
+    void CheckAndSwitchBlock()
+    {
+        if (grooveGaugeManager == null || playback.id == CriAtomExPlayback.invalidId) return;
+
+        // まだブロック切り替えしていない かつ ゲージが満タン
+        if (!hasTriggeredBlockSwitch && grooveGaugeManager.IsGaugeFull())
+        {
+            playback.SetNextBlockIndex(1);
+            hasTriggeredBlockSwitch = true;
+            Debug.Log("<color=cyan>★ GROOVE MAX! Switching to Block 1 ★</color>");
         }
     }
 
