@@ -4,176 +4,153 @@ using System.Collections.Generic;
 
 public class CRICueTest : MonoBehaviour
 {
-    private CriAtomSource atomSource;
+    [Header("CRI Settings")]
+    [SerializeField] private CriAtomSource atomSource;
+    [SerializeField] private string cueName = "Stage1_Cue"; // 再生するキュー名
+
+    [Header("Pool Settings")]
+    [SerializeField] private NotePoolManager notePoolManager;
+
+    [Header("Rhythm Game Settings")]
+    [Tooltip("ループ1周あたりの拍数（例: 4/4拍子で32小節なら = 128）")]
+    [SerializeField] private int loopLengthInBeats = 128; 
+    
+    [Tooltip("ノートが判定ラインに到達するまでの拍数（スクロール速度に相当）")]
+    [SerializeField] private float appearTimeInBeats = 4.0f;
+
+    [Header("Positions")]
+    [SerializeField] private Vector3 noteSpawnPosition = new Vector3(0, 10, 0);
+    [SerializeField] private Vector3 noteTargetPosition = new Vector3(0, -4, 0);
+    [SerializeField] private float noteDestroyY = -5.0f;
+
+    // 内部変数
     private CriAtomExPlayer player;
     private CriAtomExPlayback playback;
-
-    private NotePoolManager notePoolManager;
-
-    // ノートの管理
     private List<NoteController> activeNotes = new List<NoteController>();
 
-    // ノートの設定
-    private readonly Vector3 noteSpawnPosition = new Vector3(0, 10, 0);  // 出現位置
-    private readonly Vector3 noteTargetPosition = new Vector3(0, -4, 0); // 目標位置（4Beatでここに到達）
-    private readonly float noteDestroyY = -5.0f;                         // 削除位置のY座標
+    // ビート管理用
+    private float lastLoopBeat = -1;
+    private float accumulatedBeats = 0; // ループ回数分を含んだ通算ビート数
+    private int lastSpawnedBeat = -1;   // 重複生成防止用
 
-    // ビート管理
-    private int lastBeatCount = -1;  // 前回のビートカウント
-    private float beatDuration = 0f;  // 1ビートの長さ（秒）
-    private long lastAudioTime = -1; // 前回のオーディオ時間（ミリ秒）
-
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        notePoolManager = GameObject.Find("NotePoolManager").GetComponent<NotePoolManager>();
+        // コンポーネント取得の保険
+        if (atomSource == null) atomSource = GetComponent<CriAtomSource>();
+        if (notePoolManager == null) notePoolManager = FindFirstObjectByType<NotePoolManager>();
 
-        // CriAtomSourceコンポーネントを取得
-        atomSource = GetComponent<CriAtomSource>();
-        if (atomSource == null)
-        {
-            Debug.LogError("CRI Atom Source component not found!");
-            return;
-        }
-
-        // CriAtomExPlayerを音声同期タイマ利用で作成
+        // プレイヤーの初期化（音声同期タイマ有効化）
         player = new CriAtomExPlayer(true);
-        if (player == null)
-        {
-            Debug.LogError("CriAtomExPlayer not found!");
-            return;
-        }
 
-        // キューの再生
         PlayCue();
     }
 
-    /// <summary>
-    /// CRI Atom Sourceに設定されているキューを再生します
-    /// </summary>
     void PlayCue()
     {
-        if (atomSource == null || player == null)
-        {
-            return;
-        }
+        if (atomSource == null || player == null) return;
 
-        // ACBデータを取得
         CriAtomExAcb acb = CriAtom.GetAcb(atomSource.cueSheet);
         if (acb == null)
         {
-            Debug.LogError($"ACB not found: {atomSource.cueSheet}");
+            Debug.LogError($"ACB data not found: {atomSource.cueSheet}");
             return;
         }
 
-        // キューをセット
-        player.SetCue(acb, atomSource.cueName);
-
-        // 再生を開始
+        player.SetCue(acb, cueName);
         playback = player.Start();
 
-        Debug.Log($"Playing cue: {atomSource.cueName} from sheet: {atomSource.cueSheet}");
+        Debug.Log($"Playback started: {cueName}");
     }
 
-    // Update is called once per frame
     void Update()
     {
-        if (playback.id == CriAtomExPlayback.invalidId)
+        // 再生中でなければ何もしない
+        if (playback.id == CriAtomExPlayback.invalidId || playback.GetStatus() != CriAtomExPlayback.Status.Playing)
         {
             return;
         }
 
-        // オーディオと同期した時間を取得（ミリ秒）
-        long currentAudioTimeMs = playback.GetTimeSyncedWithAudio();
-        float currentAudioTime = currentAudioTimeMs / 1000.0f; // 秒に変換
-
-        // ループ検出: 時間が減少したらループしたと判断
-        if (lastAudioTime != -1 && currentAudioTimeMs < lastAudioTime)
-        {
-            Debug.Log($"Loop detected! Time reset from {lastAudioTime}ms to {currentAudioTimeMs}ms");
-            // 全てのノートをクリア
-            foreach (var note in activeNotes)
-            {
-                note.ReturnToPool();
-            }
-            activeNotes.Clear();
-            lastBeatCount = -1;
-        }
-        lastAudioTime = currentAudioTimeMs;
-
-        // ビート同期情報を取得
+        // --- 1. ビート情報の取得と計算 ---
         playback.GetBeatSyncInfo(out CriAtomExBeatSync.Info info);
 
-        // BPMから1ビートの長さを計算（秒）
-        if (info.bpm > 0)
+        Debug.Log($"BPM: {info.bpm}, BarCount: {info.barCount}, BeatCount: {info.beatCount}, BeatProgress: {info.beatProgress}");
+
+        // まだビート情報が来ていない（再生直後など）場合はスキップ
+        if (info.bpm <= 0) return;
+
+        // 現在のループ内でのビート位置を計算
+        float currentLoopBeat = (info.barCount) * info.numBeats 
+                                + info.beatCount 
+                                + info.beatProgress;
+
+        // --- 2. ループ検出と通算ビートの更新 ---
+        // 前回より値が大きく減っていたらループしたとみなす
+        // (許容誤差として -1.0f くらい見ておくと安全)
+        if (lastLoopBeat != -1 && currentLoopBeat < lastLoopBeat - 1.0f)
         {
-            beatDuration = 60.0f / info.bpm;
+            accumulatedBeats += loopLengthInBeats;
+            Debug.Log($"<color=cyan>Loop Detected!</color> Accumulated: {accumulatedBeats}");
+        }
+        lastLoopBeat = currentLoopBeat;
+
+        // ゲーム全体での「通算ビート数」
+        float totalLinearBeat = accumulatedBeats + currentLoopBeat;
+
+
+        // --- 3. ノート生成ロジック（テスト用：毎拍生成） ---
+        // 「今」より appearTimeInBeats(4拍) 先の未来にノートを置く
+        int targetBeatIndex = Mathf.FloorToInt(totalLinearBeat + appearTimeInBeats);
+
+        // まだその拍のノートを作っていなければ生成
+        if (targetBeatIndex > lastSpawnedBeat)
+        {
+            SpawnNote(targetBeatIndex);
+            lastSpawnedBeat = targetBeatIndex;
         }
 
-        // 現在のビートカウントをチェック
-        int currentBeatCount = (int)info.beatCount;
 
-        // 新しいビートに入った時にノートを生成
-        if (currentBeatCount != lastBeatCount && lastBeatCount != -1)
-        {
-            SpawnNote(currentAudioTime, beatDuration);
-        }
-        lastBeatCount = currentBeatCount;
+        // --- 4. 全ノートの座標更新 ---
+        UpdateAllNotes(totalLinearBeat);
 
-        // 全てのアクティブなノートの位置を更新
-        UpdateAllNotes(currentAudioTime);
 
-        // 削除位置に到達したノートをプールに返却
+        // --- 5. 画面外のノート回収 ---
         DestroyPassedNotes();
     }
 
     /// <summary>
-    /// ノートを生成する
+    /// 指定された通算ビート(targetBeat)に着弾するノートを生成
     /// </summary>
-    /// <param name="currentTime">現在時刻</param>
-    /// <param name="beatDuration">1ビートの長さ（秒）</param>
-    void SpawnNote(float currentTime, float beatDuration)
+    void SpawnNote(float targetBeat)
     {
-        if (notePoolManager == null)
-        {
-            Debug.LogError("NotePoolManager not found!");
-            return;
-        }
+        if (notePoolManager == null) return;
 
-        // プールからノートを取得
-        NoteController note = notePoolManager.SpawnNote(noteSpawnPosition, 0);
+        var note = notePoolManager.SpawnNote(noteSpawnPosition, 0);
 
-        // ノートの初期化
-        // 開始位置から目標位置まで、4ビートの時間で移動するように設定（速度1/4）
-        note.Initialize(noteSpawnPosition, noteTargetPosition, currentTime, currentTime + beatDuration * 4);
+        // NoteControllerに「目標ビート」を設定
+        // initializeメソッドには「現在の通算ビート」ではなく「目標の通算ビート」を渡すのがポイント
+        note.Initialize(
+            noteSpawnPosition,
+            noteTargetPosition,
+            targetBeat // これが NoteTime になる
+        );
 
-        // アクティブリストに追加
         activeNotes.Add(note);
-
-        Debug.Log($"Note spawned at time: {currentTime}, will reach target at: {currentTime + beatDuration * 4}");
     }
 
-    /// <summary>
-    /// 全てのノートの位置を更新
-    /// </summary>
-    /// <param name="currentTime">現在時刻</param>
-    void UpdateAllNotes(float currentTime)
+    void UpdateAllNotes(float currentTotalBeat)
     {
         foreach (var note in activeNotes)
         {
-            note.UpdatePosition(currentTime);
+            // ノート側で y = TargetY + (TargetBeat - CurrentTotalBeat) * Speed を計算させる
+            note.UpdatePositionByBeat(currentTotalBeat);
         }
     }
 
-    /// <summary>
-    /// 削除位置を過ぎたノートをプールに返却
-    /// </summary>
     void DestroyPassedNotes()
     {
-        // 後ろから削除していく（リストの削除による影響を避けるため）
         for (int i = activeNotes.Count - 1; i >= 0; i--)
         {
-            if (activeNotes[i].ShouldBeDestroyed(noteDestroyY))
+            if (activeNotes[i].transform.position.y <= noteDestroyY)
             {
                 activeNotes[i].ReturnToPool();
                 activeNotes.RemoveAt(i);
@@ -183,22 +160,18 @@ public class CRICueTest : MonoBehaviour
 
     void OnDestroy()
     {
-        // 全てのノートをプールに返却
-        foreach (var note in activeNotes)
-        {
-            note.ReturnToPool();
-        }
-        activeNotes.Clear();
-
-        // 再生を停止
-        if (player != null && playback.id != CriAtomExPlayback.invalidId)
+        // 終了処理
+        if (player != null)
         {
             player.Stop();
+            player.Dispose();
         }
-    }
 
-    private void OnBeatSyncCallback(ref CriAtomExBeatSync.Info info)
-    {
-        Debug.Log($"OnBeatSyncCallback: {info.barCount} {info.beatCount} {info.beatProgress} {info.bpm} {info.offset} {info.numBeats}");
+        // 残ったノートをプールへ返却
+        foreach (var note in activeNotes)
+        {
+            if (note != null) note.ReturnToPool();
+        }
+        activeNotes.Clear();
     }
 }
