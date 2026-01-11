@@ -11,6 +11,11 @@ public class CRICueTest : MonoBehaviour
     [Header("Pool Settings")]
     [SerializeField] private NotePoolManager notePoolManager;
 
+    [Header("Gameplay Systems")]
+    [SerializeField] private JudgmentSystem judgmentSystem;
+    [SerializeField] private GrooveGaugeManager grooveGaugeManager;
+    [SerializeField] private GameplayUI gameplayUI;
+
     [Header("Rhythm Game Settings")]
     [Tooltip("ループ1周あたりの拍数（例: 4/4拍子で32小節なら = 128）")]
     [SerializeField] private int loopLengthInBeats = 128; 
@@ -35,12 +40,16 @@ public class CRICueTest : MonoBehaviour
     private float lastLoopBeat = -1;
     private float accumulatedBeats = 0; // ループ回数分を含んだ通算ビート数
     private int lastSpawnedBeat = -1;   // 重複生成防止用
+    private float currentTotalBeat = 0; // Update内で共有する現在の通算ビート
 
     void Start()
     {
         // コンポーネント取得の保険
         if (atomSource == null) atomSource = GetComponent<CriAtomSource>();
         if (notePoolManager == null) notePoolManager = FindFirstObjectByType<NotePoolManager>();
+        if (judgmentSystem == null) judgmentSystem = GetComponent<JudgmentSystem>();
+        if (grooveGaugeManager == null) grooveGaugeManager = GetComponent<GrooveGaugeManager>();
+        if (gameplayUI == null) gameplayUI = FindFirstObjectByType<GameplayUI>();
 
         // プレイヤーの初期化（音声同期タイマ有効化）
         player = new CriAtomExPlayer(true);
@@ -73,10 +82,13 @@ public class CRICueTest : MonoBehaviour
             return;
         }
 
+        // --- 0. 入力処理 ---
+        HandleInput();
+
         // --- 1. ビート情報の取得と計算 ---
         playback.GetBeatSyncInfo(out CriAtomExBeatSync.Info info);
 
-        Debug.Log($"BPM: {info.bpm}, BarCount: {info.barCount}, BeatCount: {info.beatCount}, BeatProgress: {info.beatProgress}");
+        // Debug.Log($"BPM: {info.bpm}, BarCount: {info.barCount}, BeatCount: {info.beatCount}, BeatProgress: {info.beatProgress}");
 
         // まだビート情報が来ていない（再生直後など）場合はスキップ
         if (info.bpm <= 0) return;
@@ -97,12 +109,12 @@ public class CRICueTest : MonoBehaviour
         lastLoopBeat = currentLoopBeat;
 
         // ゲーム全体での「通算ビート数」
-        float totalLinearBeat = accumulatedBeats + currentLoopBeat;
+        currentTotalBeat = accumulatedBeats + currentLoopBeat;
 
 
         // --- 3. ノート生成ロジック（テスト用：毎拍生成） ---
         // 「今」より appearTimeInBeats(4拍) 先の未来にノートを置く
-        int targetBeatIndex = Mathf.FloorToInt(totalLinearBeat + appearTimeInBeats);
+        int targetBeatIndex = Mathf.FloorToInt(currentTotalBeat + appearTimeInBeats);
 
         // まだその拍のノートを作っていなければ生成
         if (targetBeatIndex > lastSpawnedBeat)
@@ -113,16 +125,16 @@ public class CRICueTest : MonoBehaviour
 
 
         // --- 4. 全ノートの座標更新 ---
-        UpdateAllNotes(totalLinearBeat);
+        UpdateAllNotes(currentTotalBeat);
 
 
-        // --- 5. 画面外のノート回収 ---
+        // --- 5. 画面外のノート回収とミス判定 ---
+        CheckMissedNotes();
         DestroyPassedNotes();
 
-        for (int i = 0; i < aisacValues.Length; i++)
-        {
-            player.SetAisacControl((uint)i, aisacValues[i]);
-        }
+
+        // --- 6. AISAC更新（グルーブゲージに基づく） ---
+        UpdateAisacByGrooveGauge();
 
         player.UpdateAll();
     }
@@ -156,6 +168,91 @@ public class CRICueTest : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 左クリック入力を処理してノート判定を行う
+    /// </summary>
+    void HandleInput()
+    {
+        // 左クリックが押された瞬間
+        if (Input.GetMouseButtonDown(0))
+        {
+            JudgeNearestNote();
+        }
+    }
+
+    /// <summary>
+    /// 現在のビートに最も近いノートを判定
+    /// </summary>
+    void JudgeNearestNote()
+    {
+        if (judgmentSystem == null || grooveGaugeManager == null) return;
+
+        NoteController closestNote = null;
+        float closestBeatDifference = float.MaxValue;
+
+        // 判定範囲内の最も近いノートを探す
+        foreach (var note in activeNotes)
+        {
+            if (note.IsJudged()) continue; // すでに判定済みのノートはスキップ
+
+            float beatDiff = Mathf.Abs(note.GetTargetBeat() - currentTotalBeat);
+
+            // 判定範囲内かつ最も近いノートを記録
+            if (judgmentSystem.IsInJudgmentRange(note.GetTargetBeat(), currentTotalBeat)
+                && beatDiff < closestBeatDifference)
+            {
+                closestNote = note;
+                closestBeatDifference = beatDiff;
+            }
+        }
+
+        // 最も近いノートを判定
+        if (closestNote != null)
+        {
+            JudgmentResult result = judgmentSystem.Judge(closestNote.GetTargetBeat(), currentTotalBeat);
+            grooveGaugeManager.UpdateGauge(result);
+            closestNote.SetJudged(true);
+
+            // UIに判定結果を表示
+            if (gameplayUI != null)
+            {
+                gameplayUI.ShowJudgment(result);
+            }
+
+            // ノートを即座に削除（判定済みノートを残さない）
+            closestNote.ReturnToPool();
+            activeNotes.Remove(closestNote);
+        }
+        else
+        {
+            Debug.Log("<color=gray>No note in judgment range</color>");
+        }
+    }
+
+    /// <summary>
+    /// 判定範囲を過ぎたノートをミス判定
+    /// </summary>
+    void CheckMissedNotes()
+    {
+        if (judgmentSystem == null || grooveGaugeManager == null) return;
+
+        for (int i = activeNotes.Count - 1; i >= 0; i--)
+        {
+            var note = activeNotes[i];
+
+            // すでに判定済みならスキップ
+            if (note.IsJudged()) continue;
+
+            // 判定範囲を過ぎていたらミス
+            if (judgmentSystem.HasPassedJudgmentRange(note.GetTargetBeat(), currentTotalBeat))
+            {
+                grooveGaugeManager.UpdateGauge(JudgmentResult.Miss);
+                note.SetJudged(true);
+                Debug.Log($"<color=red>MISS!</color> Missed note at beat {note.GetTargetBeat():F2}");
+            }
+        }
+    }
+
     void DestroyPassedNotes()
     {
         for (int i = activeNotes.Count - 1; i >= 0; i--)
@@ -165,6 +262,26 @@ public class CRICueTest : MonoBehaviour
                 activeNotes[i].ReturnToPool();
                 activeNotes.RemoveAt(i);
             }
+        }
+    }
+
+    /// <summary>
+    /// グルーブゲージの値に基づいてAISACを更新
+    /// </summary>
+    void UpdateAisacByGrooveGauge()
+    {
+        if (grooveGaugeManager == null || player == null) return;
+
+        // ゲージ値を0.0～1.0に正規化
+        float normalizedGauge = grooveGaugeManager.GetNormalizedGaugeValue();
+
+        // AISAC[0]にゲージ値を設定（0.0～1.0）
+        player.SetAisacControl(0, normalizedGauge);
+
+        // デバッグ用に配列の値も更新（インスペクタで確認できるように）
+        if (aisacValues.Length > 0)
+        {
+            aisacValues[0] = normalizedGauge;
         }
     }
 

@@ -17,6 +17,7 @@ public class NoteController : MonoBehaviour
     private float _targetBeat;
     private Vector3 _startPos;
     private Vector3 _targetPos;
+    private bool _isJudged = false; // 判定済みかどうか
 
     // 生成時にプールをセットするメソッド
     public void SetPool(IObjectPool<NoteController> pool)
@@ -41,6 +42,7 @@ public class NoteController : MonoBehaviour
         _startPos = start;
         _targetPos = target;
         _targetBeat = targetBeat;
+        _isJudged = false; // 判定フラグをリセット
 
         // 見た目のリセットなど
         transform.position = start;
@@ -97,6 +99,22 @@ public class NoteController : MonoBehaviour
     public void SetPosition(float y)
     {
         gameObject.transform.position = new Vector3(0, y, 0);
+    }
+
+    // 判定関連のメソッド
+    public bool IsJudged()
+    {
+        return _isJudged;
+    }
+
+    public void SetJudged(bool judged)
+    {
+        _isJudged = judged;
+    }
+
+    public float GetTargetBeat()
+    {
+        return _targetBeat;
     }
 
     // デバッグ用：targetBeatをオブジェクトのそばに表示
