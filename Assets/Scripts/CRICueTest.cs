@@ -23,6 +23,9 @@ public class CRICueTest : MonoBehaviour
     [SerializeField] private Vector3 noteTargetPosition = new Vector3(0, -4, 0);
     [SerializeField] private float noteDestroyY = -5.0f;
 
+    [Header("Aisac")]
+    [SerializeField] private float[] aisacValues = { 1.0f, 0.0f };
+
     // 内部変数
     private CriAtomExPlayer player;
     private CriAtomExPlayback playback;
@@ -115,6 +118,13 @@ public class CRICueTest : MonoBehaviour
 
         // --- 5. 画面外のノート回収 ---
         DestroyPassedNotes();
+
+        for (int i = 0; i < aisacValues.Length; i++)
+        {
+            player.SetAisacControl((uint)i, aisacValues[i]);
+        }
+
+        player.UpdateAll();
     }
 
     /// <summary>
