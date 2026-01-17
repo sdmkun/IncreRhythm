@@ -56,6 +56,10 @@ public class CRICueTest : MonoBehaviour
 
         // プレイヤーの初期化（音声同期タイマ有効化）
         player = new CriAtomExPlayer(true);
+    
+        // TODO: エフェクトバス
+        // CriAtom.AttachDspBusSetting("DspBus_Effects");
+        // atomSource.SetBusSendLevel("DspBus_Effects", 0);
 
         PlayCue();
     }
