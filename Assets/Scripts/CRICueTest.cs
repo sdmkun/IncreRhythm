@@ -9,12 +9,13 @@ public class CRICueTest : MonoBehaviour
     [SerializeField] private string cueName = "Stage1_Cue"; // 再生するキュー名
 
     [Header("Pool Settings")]
-    [SerializeField] private NotePoolManager notePoolManager;
+    [SerializeField] private ArcNotePoolManager arcNotePoolManager;
 
     [Header("Gameplay Systems")]
     [SerializeField] private JudgmentSystem judgmentSystem;
     [SerializeField] private GrooveGaugeManager grooveGaugeManager;
     [SerializeField] private GameplayUI gameplayUI;
+    [SerializeField] private JudgmentLineRing judgmentLineRing;
 
     [Header("Rhythm Game Settings")]
     [Tooltip("ループ1周あたりの拍数（例: 4/4拍子で32小節なら = 128）")]
@@ -23,10 +24,13 @@ public class CRICueTest : MonoBehaviour
     [Tooltip("ノートが判定ラインに到達するまでの拍数（スクロール速度に相当）")]
     [SerializeField] private float appearTimeInBeats = 4.0f;
 
-    [Header("Positions")]
-    [SerializeField] private Vector3 noteSpawnPosition = new Vector3(0, 10, 0);
-    [SerializeField] private Vector3 noteTargetPosition = new Vector3(0, -4, 0);
-    [SerializeField] private float noteDestroyY = -5.0f;
+    [Header("Arc Note Settings")]
+    [Tooltip("判定ラインの半径")]
+    [SerializeField] private float judgmentRadius = 5.0f;
+    [Tooltip("1ノートあたりの角度変化（時計回り）")]
+    [SerializeField] private float angleStepPerNote = 45.0f;
+    [Tooltip("判定ライン到達後、削除するまでの拍数")]
+    [SerializeField] private float deleteDelayInBeats = 4.0f; // 1小節 = 4拍
 
     [Header("Aisac")]
     [SerializeField] private float[] aisacValues = { 1.0f, 0.0f };
@@ -34,13 +38,16 @@ public class CRICueTest : MonoBehaviour
     // 内部変数
     private CriAtomExPlayer player;
     private CriAtomExPlayback playback;
-    private List<NoteController> activeNotes = new List<NoteController>();
+    private List<ArcNoteController> activeArcNotes = new List<ArcNoteController>();
 
     // ビート管理用
     private float lastLoopBeat = -1;
     private float accumulatedBeats = 0; // ループ回数分を含んだ通算ビート数
     private int lastSpawnedBeat = -1;   // 重複生成防止用
     private float currentTotalBeat = 0; // Update内で共有する現在の通算ビート
+
+    // 角度管理用
+    private float currentAngle = 0.0f;  // 現在の生成角度（時計回りで増加）
 
     // ブロック切り替え用
     private bool hasTriggeredBlockSwitch = false; // ブロック切り替え済みフラグ
@@ -49,10 +56,11 @@ public class CRICueTest : MonoBehaviour
     {
         // コンポーネント取得の保険
         if (atomSource == null) atomSource = GetComponent<CriAtomSource>();
-        if (notePoolManager == null) notePoolManager = FindFirstObjectByType<NotePoolManager>();
+        if (arcNotePoolManager == null) arcNotePoolManager = FindFirstObjectByType<ArcNotePoolManager>();
         if (judgmentSystem == null) judgmentSystem = GetComponent<JudgmentSystem>();
         if (grooveGaugeManager == null) grooveGaugeManager = GetComponent<GrooveGaugeManager>();
         if (gameplayUI == null) gameplayUI = FindFirstObjectByType<GameplayUI>();
+        if (judgmentLineRing == null) judgmentLineRing = FindFirstObjectByType<JudgmentLineRing>();
 
         // プレイヤーの初期化（音声同期タイマ有効化）
         player = new CriAtomExPlayer(true);
@@ -155,27 +163,34 @@ public class CRICueTest : MonoBehaviour
     /// </summary>
     void SpawnNote(float targetBeat)
     {
-        if (notePoolManager == null) return;
+        if (arcNotePoolManager == null) return;
 
-        var note = notePoolManager.SpawnNote(noteSpawnPosition, 0);
-
-        // NoteControllerに「目標ビート」を設定
-        // initializeメソッドには「現在の通算ビート」ではなく「目標の通算ビート」を渡すのがポイント
-        note.Initialize(
-            noteSpawnPosition,
-            noteTargetPosition,
-            targetBeat // これが NoteTime になる
+        // 1つのノートを現在の角度で生成
+        var arcNote = arcNotePoolManager.SpawnArcNote(
+            targetBeat,
+            appearTimeInBeats,
+            currentAngle,
+            judgmentRadius
         );
 
-        activeNotes.Add(note);
+        activeArcNotes.Add(arcNote);
+
+        // 次の角度へ進める（時計回り = マイナス方向）
+        currentAngle -= angleStepPerNote;
+
+        // 360度でループ（0～359.99...の範囲に保つ）
+        if (currentAngle < 0)
+        {
+            currentAngle += 360f;
+        }
     }
 
     void UpdateAllNotes(float currentTotalBeat)
     {
-        foreach (var note in activeNotes)
+        // 円弧ノート更新
+        foreach (var arcNote in activeArcNotes)
         {
-            // ノート側で y = TargetY + (TargetBeat - CurrentTotalBeat) * Speed を計算させる
-            note.UpdatePositionByBeat(currentTotalBeat);
+            arcNote.UpdatePositionByBeat(currentTotalBeat);
         }
     }
 
@@ -192,28 +207,49 @@ public class CRICueTest : MonoBehaviour
     }
 
     /// <summary>
-    /// 現在のビートに最も近いノートを判定
+    /// 円弧ノートの判定（マウス位置に基づく角度判定）
     /// </summary>
     void JudgeNearestNote()
     {
-        if (judgmentSystem == null || grooveGaugeManager == null) return;
+        // マウスのワールド座標を取得
+        Vector3 mouseWorldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
+        mouseWorldPos.z = 0;
 
-        NoteController closestNote = null;
-        float closestBeatDifference = float.MaxValue;
+        // マウスの角度を計算
+        float mouseAngle = Mathf.Atan2(mouseWorldPos.y, mouseWorldPos.x) * Mathf.Rad2Deg;
+        if (mouseAngle < 0) mouseAngle += 360f; // 0-360度に正規化
 
-        // 判定範囲内の最も近いノートを探す
-        foreach (var note in activeNotes)
+        ArcNoteController closestNote = null;
+        float closestAngleDiff = float.MaxValue;
+        float closestBeatDiff = float.MaxValue;
+
+        // 判定範囲内で、角度とビートが最も近いノートを探す
+        foreach (var arcNote in activeArcNotes)
         {
-            if (note.IsJudged()) continue; // すでに判定済みのノートはスキップ
+            if (arcNote.IsJudged()) continue;
 
-            float beatDiff = Mathf.Abs(note.GetTargetBeat() - currentTotalBeat);
+            float beatDiff = Mathf.Abs(arcNote.GetTargetBeat() - currentTotalBeat);
 
-            // 判定範囲内かつ最も近いノートを記録
-            if (judgmentSystem.IsInJudgmentRange(note.GetTargetBeat(), currentTotalBeat)
-                && beatDiff < closestBeatDifference)
+            // 判定範囲内のノートのみ対象
+            if (judgmentSystem.IsInJudgmentRange(arcNote.GetTargetBeat(), currentTotalBeat))
             {
-                closestNote = note;
-                closestBeatDifference = beatDiff;
+                // 角度差を計算（0-180度の範囲）
+                float angleDiff = Mathf.Abs(Mathf.DeltaAngle(mouseAngle, arcNote.GetAngleDeg()));
+
+                // 角度判定の許容範囲（ノート間隔の半分 + 余裕）
+                float angleThreshold = angleStepPerNote / 2f + 10f;
+
+                if (angleDiff <= angleThreshold)
+                {
+                    // ビート差が最も小さいものを優先
+                    if (beatDiff < closestBeatDiff ||
+                        (beatDiff == closestBeatDiff && angleDiff < closestAngleDiff))
+                    {
+                        closestNote = arcNote;
+                        closestAngleDiff = angleDiff;
+                        closestBeatDiff = beatDiff;
+                    }
+                }
             }
         }
 
@@ -230,13 +266,14 @@ public class CRICueTest : MonoBehaviour
                 gameplayUI.ShowJudgment(result);
             }
 
-            // ノートを即座に削除（判定済みノートを残さない）
-            closestNote.ReturnToPool();
-            activeNotes.Remove(closestNote);
+            // 判定ライン到達時の処理（非表示 + 削除タイミング設定）
+            closestNote.OnReachedJudgmentLine(currentTotalBeat, deleteDelayInBeats);
+
+            Debug.Log($"<color=lime>HIT!</color> Angle: {closestNote.GetAngleDeg():F1}°, Beat diff: {closestBeatDiff:F3}");
         }
         else
         {
-            Debug.Log("<color=gray>No note in judgment range</color>");
+            Debug.Log("<color=gray>No arc note in judgment range</color>");
         }
     }
 
@@ -247,31 +284,37 @@ public class CRICueTest : MonoBehaviour
     {
         if (judgmentSystem == null || grooveGaugeManager == null) return;
 
-        for (int i = activeNotes.Count - 1; i >= 0; i--)
+        // 円弧ノートのミス判定
+        for (int i = activeArcNotes.Count - 1; i >= 0; i--)
         {
-            var note = activeNotes[i];
+            var arcNote = activeArcNotes[i];
 
             // すでに判定済みならスキップ
-            if (note.IsJudged()) continue;
+            if (arcNote.IsJudged()) continue;
 
             // 判定範囲を過ぎていたらミス
-            if (judgmentSystem.HasPassedJudgmentRange(note.GetTargetBeat(), currentTotalBeat))
+            if (judgmentSystem.HasPassedJudgmentRange(arcNote.GetTargetBeat(), currentTotalBeat))
             {
                 grooveGaugeManager.UpdateGauge(JudgmentResult.Miss);
-                note.SetJudged(true);
-                Debug.Log($"<color=red>MISS!</color> Missed note at beat {note.GetTargetBeat():F2}");
+                arcNote.SetJudged(true);
+
+                // ミス時も非表示にして削除タイミングを設定
+                arcNote.OnReachedJudgmentLine(currentTotalBeat, deleteDelayInBeats);
+
+                Debug.Log($"<color=red>MISS!</color> Missed arc note at beat {arcNote.GetTargetBeat():F2}, angle {arcNote.GetAngleDeg():F0}°");
             }
         }
     }
 
     void DestroyPassedNotes()
     {
-        for (int i = activeNotes.Count - 1; i >= 0; i--)
+        // 削除タイミングに達した円弧ノートを削除
+        for (int i = activeArcNotes.Count - 1; i >= 0; i--)
         {
-            if (activeNotes[i].transform.position.y <= noteDestroyY)
+            if (activeArcNotes[i].ShouldBeDeleted(currentTotalBeat))
             {
-                activeNotes[i].ReturnToPool();
-                activeNotes.RemoveAt(i);
+                activeArcNotes[i].ReturnToPool();
+                activeArcNotes.RemoveAt(i);
             }
         }
     }
@@ -321,11 +364,11 @@ public class CRICueTest : MonoBehaviour
             player.Dispose();
         }
 
-        // 残ったノートをプールへ返却
-        foreach (var note in activeNotes)
+        // 円弧ノートをプールへ返却
+        foreach (var arcNote in activeArcNotes)
         {
-            if (note != null) note.ReturnToPool();
+            if (arcNote != null) arcNote.ReturnToPool();
         }
-        activeNotes.Clear();
+        activeArcNotes.Clear();
     }
 }
