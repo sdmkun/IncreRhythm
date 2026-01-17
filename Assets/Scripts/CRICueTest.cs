@@ -8,6 +8,12 @@ public class CRICueTest : MonoBehaviour
     [SerializeField] private CriAtomSource atomSource;
     [SerializeField] private string cueName = "Stage1_Cue"; // 再生するキュー名
 
+    [Header("SE Settings")]
+    [SerializeField] private CriAtomSource seAtomSource;  // SE用のAtomSource
+    [SerializeField] private string hitSoundPerfectCueName = "Hit_Perfect";  // Perfect用SE
+    [SerializeField] private string hitSoundGreatCueName = "Hit_Great";      // Great用SE
+    [SerializeField] private string hitSoundGoodCueName = "Hit_Good";        // Good用SE
+
     [Header("Pool Settings")]
     [SerializeField] private ArcNotePoolManager arcNotePoolManager;
 
@@ -64,6 +70,18 @@ public class CRICueTest : MonoBehaviour
         if (judgmentLineRing == null) judgmentLineRing = FindFirstObjectByType<JudgmentLineRing>();
         if (judgmentPoint == null) judgmentPoint = FindFirstObjectByType<JudgmentPointController>();
 
+        // SE用のAtomSourceが未設定の場合、新規に追加
+        if (seAtomSource == null)
+        {
+            // GameObjectに新しいCriAtomSourceコンポーネントを追加
+            seAtomSource = gameObject.AddComponent<CriAtomSource>();
+            // 同じCueSheetを使用（必要に応じてSE専用のCueSheetに変更可能）
+            if (atomSource != null)
+            {
+                seAtomSource.cueSheet = atomSource.cueSheet;
+            }
+        }
+
         // 判定ポイントにリング半径を設定
         if (judgmentPoint != null)
         {
@@ -93,6 +111,8 @@ public class CRICueTest : MonoBehaviour
 
         player.SetCue(acb, cueName);
         playback = player.Start();
+
+        UpdateAisacByGrooveGauge();
 
         Debug.Log($"Playback started: {cueName}");
     }
@@ -245,6 +265,12 @@ public class CRICueTest : MonoBehaviour
                         gameplayUI.ShowJudgment(result);
                     }
 
+                    // ヒット効果音を再生
+                    PlayHitSound(result);
+
+                    // ヒットエフェクトを再生（判定ポイントの角度で）
+                    arcNote.PlayHitEffect(pointAngle, result);
+
                     // 判定ライン到達時の処理（非表示 + 削除タイミング設定）
                     arcNote.OnReachedJudgmentLine(currentTotalBeat, deleteDelayInBeats);
 
@@ -287,6 +313,39 @@ public class CRICueTest : MonoBehaviour
         while (angle < 0) angle += 360f;
         while (angle >= 360f) angle -= 360f;
         return angle;
+    }
+
+    /// <summary>
+    /// ヒット時のSEを再生
+    /// </summary>
+    /// <param name="result">判定結果</param>
+    void PlayHitSound(JudgmentResult result)
+    {
+        if (seAtomSource == null) return;
+
+        string cueName = "";
+
+        // 判定結果に応じてCue名を選択
+        switch (result)
+        {
+            case JudgmentResult.Perfect:
+                cueName = hitSoundPerfectCueName;
+                break;
+            case JudgmentResult.Great:
+                cueName = hitSoundGreatCueName;
+                break;
+            case JudgmentResult.Good:
+                cueName = hitSoundGoodCueName;
+                break;
+            // Bad/Missは音を鳴らさない（または別のSEを設定可能）
+        }
+
+        // Cue名が設定されていれば再生
+        if (!string.IsNullOrEmpty(cueName))
+        {
+            seAtomSource.cueName = cueName;
+            seAtomSource.Play();
+        }
     }
 
     /// <summary>

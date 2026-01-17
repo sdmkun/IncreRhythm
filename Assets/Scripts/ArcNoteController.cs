@@ -25,12 +25,19 @@ public class ArcNoteController : MonoBehaviour
 
     // ビジュアル管理
     private LineRenderer lineRenderer;
+    private float currentDisplayRadius = 0f;   // デバッグ表示用の現在の半径
 
     [Header("Arc Settings")]
     [SerializeField] private float arcAngleSpan = 45f;  // 円弧の角度幅
     [SerializeField] private int arcSegments = 20;      // 円弧の分割数（滑らかさ）
     [SerializeField] private float lineWidth = 0.2f;    // 線の太さ
     [SerializeField] private Color arcColor = Color.cyan; // 円弧の色
+
+    [Header("Hit Effect")]
+    [SerializeField] private GameObject hitEffectPerfectPrefab;  // Perfect用エフェクト
+    [SerializeField] private GameObject hitEffectGoodPrefab;     // Good用エフェクト
+    [SerializeField] private GameObject hitEffectBadPrefab;      // Bad用エフェクト（オプション）
+    // ヒット効果音はCRICueTest側でCRI ADXのCueとして管理
 
     void Awake()
     {
@@ -122,6 +129,9 @@ public class ArcNoteController : MonoBehaviour
     void DrawArc(float radius)
     {
         if (lineRenderer == null) return;
+
+        // デバッグ表示用に現在の半径を保存
+        currentDisplayRadius = radius;
 
         lineRenderer.positionCount = arcSegments + 1;
 
@@ -247,13 +257,65 @@ public class ArcNoteController : MonoBehaviour
         return targetRadius;
     }
 
+    /// <summary>
+    /// ヒットエフェクトを再生
+    /// </summary>
+    /// <param name="hitAngle">ヒットした角度（度数法）</param>
+    /// <param name="result">判定結果</param>
+    public void PlayHitEffect(float hitAngle, JudgmentResult result)
+    {
+        // 判定結果に応じてエフェクトを選択
+        GameObject effectPrefab = null;
+
+        switch (result)
+        {
+            case JudgmentResult.Perfect:
+                effectPrefab = hitEffectPerfectPrefab;
+                break;
+            case JudgmentResult.Great:
+            case JudgmentResult.Good:
+                effectPrefab = hitEffectGoodPrefab;
+                break;
+            case JudgmentResult.Bad:
+                effectPrefab = hitEffectBadPrefab;
+                break;
+        }
+
+        // エフェクトがセットされていれば再生
+        if (effectPrefab != null)
+        {
+            // ヒット位置を計算（リング上の指定角度の位置）
+            float rad = hitAngle * Mathf.Deg2Rad;
+            float x = targetRadius * Mathf.Cos(rad);
+            float y = targetRadius * Mathf.Sin(rad);
+            Vector3 hitPosition = new Vector3(x, y, 0);
+
+            // パーティクルを生成
+            GameObject effect = Instantiate(effectPrefab, hitPosition, Quaternion.identity);
+
+            // エフェクトの向きを外側に向ける（オプション）
+            effect.transform.rotation = Quaternion.Euler(0, 0, hitAngle);
+
+            // 一定時間後に自動削除（パーティクルの寿命より長めに設定）
+            Destroy(effect, 3.0f);
+        }
+
+        // ヒット効果音はCRICueTest側でCRI ADXのCueとして再生
+    }
+
     // デバッグ用：targetBeatをオブジェクトのそばに表示
     private void OnGUI()
     {
         if (Camera.main == null) return;
 
+        // 円弧の中心角度の位置を計算（現在の半径と角度）
+        float rad = angleDeg * Mathf.Deg2Rad;
+        float x = currentDisplayRadius * Mathf.Cos(rad);
+        float y = currentDisplayRadius * Mathf.Sin(rad);
+        Vector3 arcCenterPos = new Vector3(x, y, 0);
+
         // ワールド座標をスクリーン座標に変換
-        Vector3 screenPos = Camera.main.WorldToScreenPoint(transform.position);
+        Vector3 screenPos = Camera.main.WorldToScreenPoint(arcCenterPos);
 
         // スクリーン座標系ではY軸が反転しているので補正
         screenPos.y = Screen.height - screenPos.y;
