@@ -5,6 +5,7 @@ using UnityEngine.Pool;
 /// 円弧状のノートコントローラー
 /// 画面中央から放射状に外側へ移動するノート
 /// </summary>
+[RequireComponent(typeof(LineRenderer))]
 public class ArcNoteController : MonoBehaviour
 {
     // 自身の所属するプールを覚えておく変数
@@ -13,7 +14,7 @@ public class ArcNoteController : MonoBehaviour
     // ノートの移動に関する変数
     private float targetBeat;           // 目標ビート（判定タイミング）
     private float appearTime;           // 出現から判定までの拍数
-    private float angleDeg;             // ノートの角度（度数法）
+    private float angleDeg;             // ノートの中心角度（度数法）
     private float targetRadius;         // 目標半径（判定ライン）
     private float startRadius = 0.0f;   // 開始半径（中心）
     private bool _isJudged = false;     // 判定済みかどうか
@@ -23,12 +24,35 @@ public class ArcNoteController : MonoBehaviour
     private float deleteBeat = -1f;            // 削除すべきビート
 
     // ビジュアル管理
-    private SpriteRenderer spriteRenderer;
+    private LineRenderer lineRenderer;
+
+    [Header("Arc Settings")]
+    [SerializeField] private float arcAngleSpan = 45f;  // 円弧の角度幅
+    [SerializeField] private int arcSegments = 20;      // 円弧の分割数（滑らかさ）
+    [SerializeField] private float lineWidth = 0.2f;    // 線の太さ
+    [SerializeField] private Color arcColor = Color.cyan; // 円弧の色
 
     void Awake()
     {
-        // SpriteRendererを取得
-        spriteRenderer = GetComponent<SpriteRenderer>();
+        // LineRendererを取得
+        lineRenderer = GetComponent<LineRenderer>();
+        SetupLineRenderer();
+    }
+
+    /// <summary>
+    /// LineRendererの初期設定
+    /// </summary>
+    void SetupLineRenderer()
+    {
+        if (lineRenderer == null) return;
+
+        lineRenderer.loop = false;
+        lineRenderer.useWorldSpace = true;
+        lineRenderer.startWidth = lineWidth;
+        lineRenderer.endWidth = lineWidth;
+        lineRenderer.startColor = arcColor;
+        lineRenderer.endColor = arcColor;
+        lineRenderer.sortingOrder = 5;
     }
 
     /// <summary>
@@ -59,16 +83,16 @@ public class ArcNoteController : MonoBehaviour
         this.deleteBeat = -1f;
 
         // 見た目をリセット（表示状態に）
-        if (spriteRenderer != null)
+        if (lineRenderer != null)
         {
-            spriteRenderer.enabled = true;
+            lineRenderer.enabled = true;
         }
-
-        // 角度を元に回転をセット（スプライトの向きを合わせる）
-        transform.rotation = Quaternion.Euler(0, 0, angleDeg);
 
         // 初期位置を中心にセット
         transform.position = Vector3.zero;
+
+        // 円弧を描画
+        DrawArc(startRadius);
     }
 
     /// <summary>
@@ -87,13 +111,35 @@ public class ArcNoteController : MonoBehaviour
         // 現在の半径を計算 (中心0から外側targetRadiusへ)
         float currentRadius = Mathf.Lerp(startRadius, targetRadius, progress);
 
-        // 極座標をXY座標に変換
-        // x = r * cos(θ), y = r * sin(θ)
-        float rad = angleDeg * Mathf.Deg2Rad;
-        float x = currentRadius * Mathf.Cos(rad);
-        float y = currentRadius * Mathf.Sin(rad);
+        // 円弧を現在の半径で再描画
+        DrawArc(currentRadius);
+    }
 
-        transform.position = new Vector3(x, y, 0);
+    /// <summary>
+    /// 円弧を描画
+    /// </summary>
+    /// <param name="radius">円弧の半径</param>
+    void DrawArc(float radius)
+    {
+        if (lineRenderer == null) return;
+
+        lineRenderer.positionCount = arcSegments + 1;
+
+        // 円弧の開始角度と終了角度を計算
+        // angleDegを中心に、arcAngleSpanの半分ずつ左右に広げる
+        float startAngle = angleDeg - arcAngleSpan / 2f;
+        float endAngle = angleDeg + arcAngleSpan / 2f;
+        float angleStep = arcAngleSpan / arcSegments;
+
+        for (int i = 0; i <= arcSegments; i++)
+        {
+            float angle = startAngle + (angleStep * i);
+            float rad = angle * Mathf.Deg2Rad;
+            float x = radius * Mathf.Cos(rad);
+            float y = radius * Mathf.Sin(rad);
+
+            lineRenderer.SetPosition(i, new Vector3(x, y, 0));
+        }
     }
 
     /// <summary>
@@ -107,9 +153,9 @@ public class ArcNoteController : MonoBehaviour
         deleteBeat = currentBeat + delayInBeats;
 
         // 見た目を非表示に
-        if (spriteRenderer != null)
+        if (lineRenderer != null)
         {
-            spriteRenderer.enabled = false;
+            lineRenderer.enabled = false;
         }
     }
 
@@ -154,6 +200,51 @@ public class ArcNoteController : MonoBehaviour
     public float GetAngleDeg()
     {
         return angleDeg;
+    }
+
+    /// <summary>
+    /// 円弧の開始角度を取得
+    /// </summary>
+    public float GetStartAngleDeg()
+    {
+        return angleDeg - arcAngleSpan / 2f;
+    }
+
+    /// <summary>
+    /// 円弧の終了角度を取得
+    /// </summary>
+    public float GetEndAngleDeg()
+    {
+        return angleDeg + arcAngleSpan / 2f;
+    }
+
+    /// <summary>
+    /// 円弧の角度幅を設定
+    /// </summary>
+    public void SetArcAngleSpan(float span)
+    {
+        arcAngleSpan = span;
+    }
+
+    /// <summary>
+    /// 現在の半径を取得（判定用）
+    /// </summary>
+    public float GetCurrentRadius(float currentTotalBeat)
+    {
+        // 進行度を計算
+        float progress = 1.0f - (targetBeat - currentTotalBeat) / appearTime;
+        progress = Mathf.Clamp01(progress);
+
+        // 現在の半径
+        return Mathf.Lerp(startRadius, targetRadius, progress);
+    }
+
+    /// <summary>
+    /// 目標半径を取得
+    /// </summary>
+    public float GetTargetRadius()
+    {
+        return targetRadius;
     }
 
     // デバッグ用：targetBeatをオブジェクトのそばに表示

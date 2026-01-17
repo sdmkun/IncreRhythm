@@ -16,6 +16,7 @@ public class CRICueTest : MonoBehaviour
     [SerializeField] private GrooveGaugeManager grooveGaugeManager;
     [SerializeField] private GameplayUI gameplayUI;
     [SerializeField] private JudgmentLineRing judgmentLineRing;
+    [SerializeField] private JudgmentPointController judgmentPoint;
 
     [Header("Rhythm Game Settings")]
     [Tooltip("ループ1周あたりの拍数（例: 4/4拍子で32小節なら = 128）")]
@@ -61,6 +62,13 @@ public class CRICueTest : MonoBehaviour
         if (grooveGaugeManager == null) grooveGaugeManager = GetComponent<GrooveGaugeManager>();
         if (gameplayUI == null) gameplayUI = FindFirstObjectByType<GameplayUI>();
         if (judgmentLineRing == null) judgmentLineRing = FindFirstObjectByType<JudgmentLineRing>();
+        if (judgmentPoint == null) judgmentPoint = FindFirstObjectByType<JudgmentPointController>();
+
+        // 判定ポイントにリング半径を設定
+        if (judgmentPoint != null)
+        {
+            judgmentPoint.SetRingRadius(judgmentRadius);
+        }
 
         // プレイヤーの初期化（音声同期タイマ有効化）
         player = new CriAtomExPlayer(true);
@@ -97,8 +105,8 @@ public class CRICueTest : MonoBehaviour
             return;
         }
 
-        // --- 0. 入力処理 ---
-        HandleInput();
+        // --- 0. 自動判定処理 ---
+        CheckAutoJudgment();
 
         // --- 1. ビート情報の取得と計算 ---
         playback.GetBeatSyncInfo(out CriAtomExBeatSync.Info info);
@@ -195,86 +203,90 @@ public class CRICueTest : MonoBehaviour
     }
 
     /// <summary>
-    /// 左クリック入力を処理してノート判定を行う
+    /// 自動判定処理：ノートがリングに到達したときに判定ポイントと重なっているかチェック
     /// </summary>
-    void HandleInput()
+    void CheckAutoJudgment()
     {
-        // 左クリックが押された瞬間
-        if (Input.GetMouseButtonDown(0))
+        if (judgmentSystem == null || grooveGaugeManager == null || judgmentPoint == null) return;
+
+        // 判定ポイントの現在の角度を取得
+        float pointAngle = judgmentPoint.GetCurrentAngleDeg();
+
+        // 全ノートをチェック
+        for (int i = activeArcNotes.Count - 1; i >= 0; i--)
         {
-            JudgeNearestNote();
+            var arcNote = activeArcNotes[i];
+
+            // すでに判定済みならスキップ
+            if (arcNote.IsJudged()) continue;
+
+            // ノートの現在の半径を取得
+            float currentRadius = arcNote.GetCurrentRadius(currentTotalBeat);
+            float targetRadius = arcNote.GetTargetRadius();
+
+            // ノートが判定ラインに到達した以降のみ判定
+            // currentRadius >= targetRadius （到達済み）
+            // かつ currentRadius - targetRadius <= radiusTolerance （通過しすぎていない）
+            float radiusTolerance = 0.3f; // 半径の許容範囲（Unity単位）
+
+            if (currentRadius >= targetRadius && currentRadius - targetRadius <= radiusTolerance)
+            {
+                // 判定ポイントが円弧の範囲内にあるかチェック
+                if (IsPointInArcRange(pointAngle, arcNote))
+                {
+                    // 判定成功！
+                    JudgmentResult result = judgmentSystem.Judge(arcNote.GetTargetBeat(), currentTotalBeat);
+                    grooveGaugeManager.UpdateGauge(result);
+                    arcNote.SetJudged(true);
+
+                    // UIに判定結果を表示
+                    if (gameplayUI != null)
+                    {
+                        gameplayUI.ShowJudgment(result);
+                    }
+
+                    // 判定ライン到達時の処理（非表示 + 削除タイミング設定）
+                    arcNote.OnReachedJudgmentLine(currentTotalBeat, deleteDelayInBeats);
+
+                    float beatDiff = arcNote.GetTargetBeat() - currentTotalBeat;
+                    Debug.Log($"<color=lime>AUTO HIT!</color> Angle: {arcNote.GetAngleDeg():F1}°, Point Angle: {pointAngle:F1}°, Beat diff: {beatDiff:F3}, Result: {result}, Radius: {currentRadius:F2}/{targetRadius:F2}");
+                }
+            }
         }
     }
 
     /// <summary>
-    /// 円弧ノートの判定（マウス位置に基づく角度判定）
+    /// 判定ポイントが円弧の角度範囲内にあるかチェック
     /// </summary>
-    void JudgeNearestNote()
+    bool IsPointInArcRange(float pointAngle, ArcNoteController arcNote)
     {
-        // マウスのワールド座標を取得
-        Vector3 mouseWorldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-        mouseWorldPos.z = 0;
+        float arcStartAngle = arcNote.GetStartAngleDeg();
+        float arcEndAngle = arcNote.GetEndAngleDeg();
 
-        // マウスの角度を計算
-        float mouseAngle = Mathf.Atan2(mouseWorldPos.y, mouseWorldPos.x) * Mathf.Rad2Deg;
-        if (mouseAngle < 0) mouseAngle += 360f; // 0-360度に正規化
+        // 角度の正規化（0～360度）
+        arcStartAngle = NormalizeAngle(arcStartAngle);
+        arcEndAngle = NormalizeAngle(arcEndAngle);
+        pointAngle = NormalizeAngle(pointAngle);
 
-        ArcNoteController closestNote = null;
-        float closestAngleDiff = float.MaxValue;
-        float closestBeatDiff = float.MaxValue;
-
-        // 判定範囲内で、角度とビートが最も近いノートを探す
-        foreach (var arcNote in activeArcNotes)
+        // 円弧が0度をまたぐ場合の処理
+        if (arcStartAngle > arcEndAngle)
         {
-            if (arcNote.IsJudged()) continue;
-
-            float beatDiff = Mathf.Abs(arcNote.GetTargetBeat() - currentTotalBeat);
-
-            // 判定範囲内のノートのみ対象
-            if (judgmentSystem.IsInJudgmentRange(arcNote.GetTargetBeat(), currentTotalBeat))
-            {
-                // 角度差を計算（0-180度の範囲）
-                float angleDiff = Mathf.Abs(Mathf.DeltaAngle(mouseAngle, arcNote.GetAngleDeg()));
-
-                // 角度判定の許容範囲（ノート間隔の半分 + 余裕）
-                float angleThreshold = angleStepPerNote / 2f + 10f;
-
-                if (angleDiff <= angleThreshold)
-                {
-                    // ビート差が最も小さいものを優先
-                    if (beatDiff < closestBeatDiff ||
-                        (beatDiff == closestBeatDiff && angleDiff < closestAngleDiff))
-                    {
-                        closestNote = arcNote;
-                        closestAngleDiff = angleDiff;
-                        closestBeatDiff = beatDiff;
-                    }
-                }
-            }
-        }
-
-        // 最も近いノートを判定
-        if (closestNote != null)
-        {
-            JudgmentResult result = judgmentSystem.Judge(closestNote.GetTargetBeat(), currentTotalBeat);
-            grooveGaugeManager.UpdateGauge(result);
-            closestNote.SetJudged(true);
-
-            // UIに判定結果を表示
-            if (gameplayUI != null)
-            {
-                gameplayUI.ShowJudgment(result);
-            }
-
-            // 判定ライン到達時の処理（非表示 + 削除タイミング設定）
-            closestNote.OnReachedJudgmentLine(currentTotalBeat, deleteDelayInBeats);
-
-            Debug.Log($"<color=lime>HIT!</color> Angle: {closestNote.GetAngleDeg():F1}°, Beat diff: {closestBeatDiff:F3}");
+            return pointAngle >= arcStartAngle || pointAngle <= arcEndAngle;
         }
         else
         {
-            Debug.Log("<color=gray>No arc note in judgment range</color>");
+            return pointAngle >= arcStartAngle && pointAngle <= arcEndAngle;
         }
+    }
+
+    /// <summary>
+    /// 角度を0～360度の範囲に正規化
+    /// </summary>
+    float NormalizeAngle(float angle)
+    {
+        while (angle < 0) angle += 360f;
+        while (angle >= 360f) angle -= 360f;
+        return angle;
     }
 
     /// <summary>
