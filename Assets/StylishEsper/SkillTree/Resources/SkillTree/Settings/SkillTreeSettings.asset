@@ -15,7 +15,7 @@ MonoBehaviour:
   skillTypes:
   - Active
   - Passive
-  allowDowngrade: 1
-  changesRequireConfirmation: 1
+  allowDowngrade: 0
+  changesRequireConfirmation: 0
   strictStatValueTypes: 0
   maxUnitLevel: 100

@@ -83,4 +83,15 @@ public class JudgmentPointController : MonoBehaviour
         float diff = Mathf.Abs(Mathf.DeltaAngle(currentAngleDeg, targetAngleDeg));
         return diff <= rangeInDeg;
     }
+
+    /// <summary>
+    /// 判定ポイントの表示/非表示を設定
+    /// </summary>
+    public void SetVisible(bool visible)
+    {
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.enabled = visible;
+        }
+    }
 }

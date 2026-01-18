@@ -23,6 +23,7 @@ public class CRICueTest : MonoBehaviour
     [SerializeField] private GameplayUI gameplayUI;
     [SerializeField] private JudgmentLineRing judgmentLineRing;
     [SerializeField] private JudgmentPointController judgmentPoint;
+    [SerializeField] private SkillTreeModeController skillTreeModeController;
 
     [Header("Rhythm Game Settings")]
     [Tooltip("ループ1周あたりの拍数（例: 4/4拍子で32小節なら = 128）")]
@@ -40,7 +41,7 @@ public class CRICueTest : MonoBehaviour
     [SerializeField] private float deleteDelayInBeats = 4.0f; // 1小節 = 4拍
 
     [Header("Aisac")]
-    [SerializeField] private float[] aisacValues = { 1.0f, 0.0f };
+    [SerializeField] private float[] aisacValues = { 0.0f, 0.5f }; // [0]: Voltage, [1]: SkillTree Mode
 
     // 内部変数
     private CriAtomExPlayer player;
@@ -59,6 +60,9 @@ public class CRICueTest : MonoBehaviour
     // ブロック切り替え用
     private bool hasTriggeredBlockSwitch = false; // ブロック切り替え済みフラグ
 
+    // スキルツリーモード管理用
+    private bool isInSkillTreeMode = false;
+
     void Start()
     {
         // コンポーネント取得の保険
@@ -69,6 +73,7 @@ public class CRICueTest : MonoBehaviour
         if (gameplayUI == null) gameplayUI = FindFirstObjectByType<GameplayUI>();
         if (judgmentLineRing == null) judgmentLineRing = FindFirstObjectByType<JudgmentLineRing>();
         if (judgmentPoint == null) judgmentPoint = FindFirstObjectByType<JudgmentPointController>();
+        if (skillTreeModeController == null) skillTreeModeController = FindFirstObjectByType<SkillTreeModeController>();
 
         // SE用のAtomSourceが未設定の場合、新規に追加
         if (seAtomSource == null)
@@ -94,6 +99,12 @@ public class CRICueTest : MonoBehaviour
         // TODO: エフェクトバス
         // CriAtom.AttachDspBusSetting("DspBus_Effects");
         // atomSource.SetBusSendLevel("DspBus_Effects", 0);
+
+        // スキルツリーモードのイベントを購読
+        if (skillTreeModeController != null)
+        {
+            skillTreeModeController.OnSkillTreeModeChanged += OnSkillTreeModeChanged;
+        }
 
         PlayCue();
     }
@@ -159,8 +170,8 @@ public class CRICueTest : MonoBehaviour
         // 「今」より appearTimeInBeats(4拍) 先の未来にノートを置く
         int targetBeatIndex = Mathf.FloorToInt(currentTotalBeat + appearTimeInBeats);
 
-        // まだその拍のノートを作っていなければ生成
-        if (targetBeatIndex > lastSpawnedBeat)
+        // スキルツリーモードでなければノート生成
+        if (!isInSkillTreeMode && targetBeatIndex > lastSpawnedBeat)
         {
             SpawnNote(targetBeatIndex);
             lastSpawnedBeat = targetBeatIndex;
@@ -391,23 +402,45 @@ public class CRICueTest : MonoBehaviour
     }
 
     /// <summary>
-    /// Voltageの値に基づいてAISACを更新
+    /// Voltageとスキルツリーモードに基づいてAISACを更新
     /// </summary>
     void UpdateAisacByVoltage()
     {
         if (voltageManager == null || player == null) return;
 
         // Voltage値を0.0～1.0に正規化
-        // float normalizedVoltage = voltageManager.GetNormalizedGaugeValue();
+        // float normalizedVoltage = voltageManager.GetNormalizedVoltageValue();
 
         // AISAC[0]にVoltage値を設定（0.0～1.0）
         // player.SetAisacControl(0, normalizedVoltage);
 
-        // デバッグ用に配列の値も更新（インスペクタで確認できるように）
-        // if (aisacValues.Length > 0)
-        // {
-        //     aisacValues[0] = normalizedVoltage;
-        // }
+        // AISAC[1]にスキルツリーモードの値を設定
+        if (skillTreeModeController != null)
+        {
+            float aisac1Value = skillTreeModeController.GetCurrentAisacValue();
+            player.SetAisacControl(1, aisac1Value);
+
+            // デバッグ用に配列の値も更新
+            if (aisacValues.Length > 1)
+            {
+                // aisacValues[0] = normalizedVoltage;
+                aisacValues[1] = aisac1Value;
+            }
+        }
+        else
+        {
+            // SkillTreeModeControllerがない場合はデフォルト値
+            player.SetAisacControl(1, 0.5f);
+            if (aisacValues.Length > 0)
+            {
+                // aisacValues[0] = normalizedVoltage;
+                aisacValues[0] = 1.0f;
+            }
+            if (aisacValues.Length > 1)
+            {
+                aisacValues[1] = 0.5f;
+            }
+        }
     }
 
     /// <summary>
@@ -426,8 +459,61 @@ public class CRICueTest : MonoBehaviour
         // }
     }
 
+    /// <summary>
+    /// スキルツリーモードの切り替え時に呼ばれる
+    /// </summary>
+    void OnSkillTreeModeChanged(bool isSkillTreeMode)
+    {
+        isInSkillTreeMode = isSkillTreeMode;
+
+        if (isSkillTreeMode)
+        {
+            // スキルツリーモードに入ったら全ノートを削除
+            ClearAllNotes();
+
+            // 判定ポイントを非表示
+            if (judgmentPoint != null)
+            {
+                judgmentPoint.SetVisible(false);
+            }
+
+            Debug.Log("<color=yellow>Skill Tree Mode: All notes cleared, judgment point hidden</color>");
+        }
+        else
+        {
+            // 通常モードに戻ったら判定ポイントを再表示
+            if (judgmentPoint != null)
+            {
+                judgmentPoint.SetVisible(true);
+            }
+
+            Debug.Log("<color=yellow>Normal Mode: Judgment point visible</color>");
+        }
+    }
+
+    /// <summary>
+    /// 全てのノートを削除してプールに返却
+    /// </summary>
+    void ClearAllNotes()
+    {
+        for (int i = activeArcNotes.Count - 1; i >= 0; i--)
+        {
+            if (activeArcNotes[i] != null)
+            {
+                activeArcNotes[i].ReturnToPool();
+            }
+        }
+        activeArcNotes.Clear();
+    }
+
     void OnDestroy()
     {
+        // イベントの購読解除
+        if (skillTreeModeController != null)
+        {
+            skillTreeModeController.OnSkillTreeModeChanged -= OnSkillTreeModeChanged;
+        }
+
         // 終了処理
         if (player != null)
         {
@@ -436,10 +522,6 @@ public class CRICueTest : MonoBehaviour
         }
 
         // 円弧ノートをプールへ返却
-        foreach (var arcNote in activeArcNotes)
-        {
-            if (arcNote != null) arcNote.ReturnToPool();
-        }
-        activeArcNotes.Clear();
+        ClearAllNotes();
     }
 }
