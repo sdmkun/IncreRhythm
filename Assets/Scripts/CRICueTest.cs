@@ -19,7 +19,7 @@ public class CRICueTest : MonoBehaviour
 
     [Header("Gameplay Systems")]
     [SerializeField] private JudgmentSystem judgmentSystem;
-    [SerializeField] private GrooveGaugeManager grooveGaugeManager;
+    [SerializeField] private VoltageManager voltageManager;
     [SerializeField] private GameplayUI gameplayUI;
     [SerializeField] private JudgmentLineRing judgmentLineRing;
     [SerializeField] private JudgmentPointController judgmentPoint;
@@ -65,7 +65,7 @@ public class CRICueTest : MonoBehaviour
         if (atomSource == null) atomSource = GetComponent<CriAtomSource>();
         if (arcNotePoolManager == null) arcNotePoolManager = FindFirstObjectByType<ArcNotePoolManager>();
         if (judgmentSystem == null) judgmentSystem = GetComponent<JudgmentSystem>();
-        if (grooveGaugeManager == null) grooveGaugeManager = GetComponent<GrooveGaugeManager>();
+        if (voltageManager == null) voltageManager = GetComponent<VoltageManager>();
         if (gameplayUI == null) gameplayUI = FindFirstObjectByType<GameplayUI>();
         if (judgmentLineRing == null) judgmentLineRing = FindFirstObjectByType<JudgmentLineRing>();
         if (judgmentPoint == null) judgmentPoint = FindFirstObjectByType<JudgmentPointController>();
@@ -112,7 +112,7 @@ public class CRICueTest : MonoBehaviour
         player.SetCue(acb, cueName);
         playback = player.Start();
 
-        UpdateAisacByGrooveGauge();
+        UpdateAisacByVoltage();
 
         Debug.Log($"Playback started: {cueName}");
     }
@@ -176,11 +176,11 @@ public class CRICueTest : MonoBehaviour
         DestroyPassedNotes();
 
 
-        // --- 6. AISAC更新（グルーブゲージに基づく） ---
-        UpdateAisacByGrooveGauge();
+        // --- 6. AISAC更新（Voltageに基づく） ---
+        UpdateAisacByVoltage();
 
 
-        // --- 7. グルーブゲージがマックスならブロック切り替え ---
+        // --- 7. Voltageがマックスならブロック切り替え ---
         CheckAndSwitchBlock();
 
         player.UpdateAll();
@@ -227,7 +227,7 @@ public class CRICueTest : MonoBehaviour
     /// </summary>
     void CheckAutoJudgment()
     {
-        if (judgmentSystem == null || grooveGaugeManager == null || judgmentPoint == null) return;
+        if (judgmentSystem == null || voltageManager == null || judgmentPoint == null) return;
 
         // 判定ポイントの現在の角度を取得
         float pointAngle = judgmentPoint.GetCurrentAngleDeg();
@@ -256,7 +256,6 @@ public class CRICueTest : MonoBehaviour
                 {
                     // 判定成功！
                     JudgmentResult result = judgmentSystem.Judge(arcNote.GetTargetBeat(), currentTotalBeat);
-                    grooveGaugeManager.UpdateGauge(result);
                     arcNote.SetJudged(true);
 
                     // UIに判定結果を表示
@@ -273,6 +272,8 @@ public class CRICueTest : MonoBehaviour
 
                     // 判定ライン到達時の処理（非表示 + 削除タイミング設定）
                     arcNote.OnReachedJudgmentLine(currentTotalBeat, deleteDelayInBeats);
+
+                    voltageManager.UpdateVoltage(result);
 
                     float beatDiff = arcNote.GetTargetBeat() - currentTotalBeat;
                     Debug.Log($"<color=lime>AUTO HIT!</color> Angle: {arcNote.GetAngleDeg():F1}°, Point Angle: {pointAngle:F1}°, Beat diff: {beatDiff:F3}, Result: {result}, Radius: {currentRadius:F2}/{targetRadius:F2}");
@@ -353,7 +354,7 @@ public class CRICueTest : MonoBehaviour
     /// </summary>
     void CheckMissedNotes()
     {
-        if (judgmentSystem == null || grooveGaugeManager == null) return;
+        if (judgmentSystem == null || voltageManager == null) return;
 
         // 円弧ノートのミス判定
         for (int i = activeArcNotes.Count - 1; i >= 0; i--)
@@ -366,7 +367,6 @@ public class CRICueTest : MonoBehaviour
             // 判定範囲を過ぎていたらミス
             if (judgmentSystem.HasPassedJudgmentRange(arcNote.GetTargetBeat(), currentTotalBeat))
             {
-                grooveGaugeManager.UpdateGauge(JudgmentResult.Miss);
                 arcNote.SetJudged(true);
 
                 // ミス時も非表示にして削除タイミングを設定
@@ -391,39 +391,39 @@ public class CRICueTest : MonoBehaviour
     }
 
     /// <summary>
-    /// グルーブゲージの値に基づいてAISACを更新
+    /// Voltageの値に基づいてAISACを更新
     /// </summary>
-    void UpdateAisacByGrooveGauge()
+    void UpdateAisacByVoltage()
     {
-        if (grooveGaugeManager == null || player == null) return;
+        if (voltageManager == null || player == null) return;
 
-        // ゲージ値を0.0～1.0に正規化
-        float normalizedGauge = grooveGaugeManager.GetNormalizedGaugeValue();
+        // Voltage値を0.0～1.0に正規化
+        // float normalizedVoltage = voltageManager.GetNormalizedGaugeValue();
 
-        // AISAC[0]にゲージ値を設定（0.0～1.0）
-        player.SetAisacControl(0, normalizedGauge);
+        // AISAC[0]にVoltage値を設定（0.0～1.0）
+        // player.SetAisacControl(0, normalizedVoltage);
 
         // デバッグ用に配列の値も更新（インスペクタで確認できるように）
-        if (aisacValues.Length > 0)
-        {
-            aisacValues[0] = normalizedGauge;
-        }
+        // if (aisacValues.Length > 0)
+        // {
+        //     aisacValues[0] = normalizedVoltage;
+        // }
     }
 
     /// <summary>
-    /// グルーブゲージがマックスになったらブロック1に切り替え
+    /// Voltageがマックスになったらブロック1に切り替え
     /// </summary>
     void CheckAndSwitchBlock()
     {
-        if (grooveGaugeManager == null || playback.id == CriAtomExPlayback.invalidId) return;
+        if (voltageManager == null || playback.id == CriAtomExPlayback.invalidId) return;
 
-        // まだブロック切り替えしていない かつ ゲージが満タン
-        if (!hasTriggeredBlockSwitch && grooveGaugeManager.IsGaugeFull())
-        {
-            playback.SetNextBlockIndex(1);
-            hasTriggeredBlockSwitch = true;
-            Debug.Log("<color=cyan>★ GROOVE MAX! Switching to Block 1 ★</color>");
-        }
+        // まだブロック切り替えしていない かつ Voltageが満タン
+        // if (!hasTriggeredBlockSwitch && voltageManager.IsGaugeFull())
+        // {
+        //     playback.SetNextBlockIndex(1);
+        //     hasTriggeredBlockSwitch = true;
+        //     Debug.Log("<color=cyan>★ VOLTAGE MAX! Switching to Block 1 ★</color>");
+        // }
     }
 
     void OnDestroy()

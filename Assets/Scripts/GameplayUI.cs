@@ -3,7 +3,7 @@ using System.Collections;
 
 /// <summary>
 /// ゲームプレイ中のUI表示を管理
-/// 判定結果とグルーブゲージの表示
+/// 判定結果とVoltageの表示
 /// </summary>
 public class GameplayUI : MonoBehaviour
 {
@@ -11,14 +11,14 @@ public class GameplayUI : MonoBehaviour
     [SerializeField] private bool showJudgmentText = true;
     [SerializeField] private float judgmentDisplayDuration = 0.5f;
 
-    [Header("Groove Gauge Display")]
-    [SerializeField] private bool showGrooveGauge = true;
-    [SerializeField] private float gaugeBarWidth = 400f;
-    [SerializeField] private float gaugeBarHeight = 30f;
-    [SerializeField] private Vector2 gaugePosition = new Vector2(50, 50);
+    [Header("Voltage Display")]
+    [SerializeField] private bool showVoltage = true;
+    [SerializeField] private float voltageBarWidth = 400f;
+    [SerializeField] private float voltageBarHeight = 30f;
+    [SerializeField] private Vector2 voltagePosition = new Vector2(50, 50);
 
     [Header("References")]
-    [SerializeField] private GrooveGaugeManager grooveGaugeManager;
+    [SerializeField] private VoltageManager voltageManager;
 
     // 内部変数
     private string currentJudgmentText = "";
@@ -27,9 +27,9 @@ public class GameplayUI : MonoBehaviour
 
     void Start()
     {
-        if (grooveGaugeManager == null)
+        if (voltageManager == null)
         {
-            grooveGaugeManager = FindFirstObjectByType<GrooveGaugeManager>();
+            voltageManager = FindFirstObjectByType<VoltageManager>();
         }
     }
 
@@ -84,10 +84,10 @@ public class GameplayUI : MonoBehaviour
             DrawJudgmentText();
         }
 
-        // グルーブゲージの表示
-        if (showGrooveGauge && grooveGaugeManager != null)
+        // Voltageの表示
+        if (showVoltage && voltageManager != null)
         {
-            DrawGrooveGauge();
+            DrawVoltage();
         }
     }
 
@@ -112,52 +112,36 @@ public class GameplayUI : MonoBehaviour
         GUI.color = Color.white;
     }
 
-    void DrawGrooveGauge()
+    void DrawVoltage()
     {
-        float gaugeValue = grooveGaugeManager.GetGaugeValue();
-        float gaugePercent = grooveGaugeManager.GetNormalizedGaugeValue();
+        // float voltageValue = voltageManager.GetVoltageValue();
+        // // float voltagePercent = voltageManager.GetNormalizedVoltageValue();
 
-        // 背景
-        Rect bgRect = new Rect(gaugePosition.x, gaugePosition.y, gaugeBarWidth, gaugeBarHeight);
-        GUI.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
-        GUI.DrawTexture(bgRect, Texture2D.whiteTexture);
+        // // 背景
+        // Rect bgRect = new Rect(voltagePosition.x, voltagePosition.y, voltageBarWidth, voltageBarHeight);
+        // GUI.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+        // GUI.DrawTexture(bgRect, Texture2D.whiteTexture);
 
-        // ゲージバー
-        Rect gaugeRect = new Rect(gaugePosition.x + 2, gaugePosition.y + 2,
-                                   (gaugeBarWidth - 4) * gaugePercent, gaugeBarHeight - 4);
+        // // Voltageバー
+        // Rect voltageRect = new Rect(voltagePosition.x + 2, voltagePosition.y + 2,
+        //                            (voltageBarWidth - 4) * voltagePercent, voltageBarHeight - 4);
 
-        // ゲージの色（値に応じて変化）
-        Color gaugeColor;
-        if (gaugePercent >= 0.8f)
-        {
-            gaugeColor = new Color(0f, 1f, 0.5f); // 高い：明るい緑
-        }
-        else if (gaugePercent >= 0.5f)
-        {
-            gaugeColor = new Color(0.5f, 1f, 0.5f); // 中間：緑
-        }
-        else if (gaugePercent >= 0.3f)
-        {
-            gaugeColor = new Color(1f, 1f, 0f); // やや低い：黄色
-        }
-        else
-        {
-            gaugeColor = new Color(1f, 0.5f, 0f); // 低い：オレンジ～赤
-        }
+        // // Voltageの色（値に応じて変化）
+        // Color voltageColor = new Color(1f, 1f, 1f);
 
-        GUI.color = gaugeColor;
-        GUI.DrawTexture(gaugeRect, Texture2D.whiteTexture);
+        // GUI.color = voltageColor;
+        // GUI.DrawTexture(voltageRect, Texture2D.whiteTexture);
 
-        // ゲージ値のテキスト
-        GUI.color = Color.white;
-        GUIStyle textStyle = new GUIStyle(GUI.skin.label);
-        textStyle.fontSize = 18;
-        textStyle.fontStyle = FontStyle.Bold;
-        textStyle.alignment = TextAnchor.MiddleLeft;
+        // // Voltage値のテキスト
+        // GUI.color = Color.white;
+        // GUIStyle textStyle = new GUIStyle(GUI.skin.label);
+        // textStyle.fontSize = 18;
+        // textStyle.fontStyle = FontStyle.Bold;
+        // textStyle.alignment = TextAnchor.MiddleLeft;
 
-        Rect textRect = new Rect(gaugePosition.x + 10, gaugePosition.y + 3, gaugeBarWidth, gaugeBarHeight);
-        GUI.Label(textRect, $"GROOVE: {gaugeValue:F1}%", textStyle);
+        // Rect textRect = new Rect(voltagePosition.x + 10, voltagePosition.y + 3, voltageBarWidth, voltageBarHeight);
+        // GUI.Label(textRect, $"VOLTAGE: {voltageValue:F1}%", textStyle);
 
-        GUI.color = Color.white;
+        // GUI.color = Color.white;
     }
 }
